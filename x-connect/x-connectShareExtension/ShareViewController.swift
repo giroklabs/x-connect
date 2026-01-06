@@ -62,63 +62,97 @@ class ShareBlogParserService {
             imageUrl = absoluteURL.absoluteString
         }
         
-        // 요약 텍스트 생성 (간단하고 짧게)
+        // 요약 텍스트 생성 (간단하고 짧게, 완전한 문장으로 끝나도록)
         // X 공유를 위해 최대 120자로 제한 (URL + 공백 고려 시 안전한 길이)
+        
+        // 문장 단위로 자르는 함수 (완전한 문장으로 끝나도록)
+        func truncateToSentence(_ text: String, maxLength: Int) -> String {
+            if text.count <= maxLength {
+                return text
+            }
+            
+            // 완전한 문장을 찾기 위해 maxLength를 약간 넘어서도 검색 (최대 15자까지 확장)
+            let searchLength = min(text.count, maxLength + 15)
+            let searchText = String(text.prefix(searchLength))
+            
+            // 문장 부호를 찾아서 완전한 문장으로 끝나도록 조정
+            let sentenceEnders: [Character] = [".", "。", "!", "?", "…"]
+            var bestBreak: String.Index? = nil
+            var perfectBreak: String.Index? = nil // 문장 부호 + 공백이 있는 완벽한 경우
+            
+            // 뒤에서부터 문장 부호를 찾음 (가장 가까운 완전한 문장 끝)
+            let searchStart = searchText.index(searchText.startIndex, offsetBy: max(0, maxLength - 80))
+            for i in (searchStart..<searchText.endIndex).reversed() {
+                if sentenceEnders.contains(searchText[i]) {
+                    // 숫자나 약어에 포함된 점인지 확인 (예: "2026.1.6.", "U.S.A.")
+                    // 하지만 "습니다.", "니다." 같은 한국어 패턴은 허용
+                    var isInNumberOrAbbr = false
+                    if i > searchText.startIndex {
+                        let prevIndex = searchText.index(before: i)
+                        let prevChar = searchText[prevIndex]
+                        // 한국어 종결어미가 아닌 경우만 약어로 간주
+                        let koreanEndings = "다습니요"
+                        isInNumberOrAbbr = prevChar.isNumber || (prevChar.isLetter && !koreanEndings.contains(prevChar))
+                    }
+                    
+                    if !isInNumberOrAbbr {
+                        // 문장 부호가 마지막 문자이면 완벽한 문장 끝
+                        if i == searchText.index(before: searchText.endIndex) {
+                            perfectBreak = searchText.endIndex
+                            break
+                        }
+                        let nextIndex = searchText.index(after: i)
+                        if nextIndex < searchText.endIndex {
+                            let nextChar = searchText[nextIndex]
+                            if nextChar == " " || nextChar == "\n" || nextChar == "\r" {
+                                perfectBreak = searchText.index(after: i)
+                                break
+                            } else if bestBreak == nil {
+                                // 첫 번째로 찾은 문장 부호는 백업으로 저장
+                                bestBreak = searchText.index(after: i)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 완벽한 문장 끝을 우선 사용 (maxLength를 약간 넘어도 허용)
+            if let breakIndex = perfectBreak {
+                let result = String(searchText[searchText.startIndex..<breakIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+                // maxLength를 크게 넘지 않는 경우에만 사용 (최대 15자까지 허용)
+                // 완전한 문장을 위해 약간의 여유를 둠
+                if result.count <= maxLength + 15 {
+                    return result
+                }
+            }
+            
+            // 완벽한 문장 끝이 없거나 너무 길면, maxLength 이내에서 일반 문장 부호 사용
+            let truncated = String(text.prefix(maxLength))
+            if let breakIndex = bestBreak, 
+               truncated.distance(from: truncated.startIndex, to: breakIndex) <= maxLength,
+               truncated.distance(from: truncated.startIndex, to: breakIndex) >= maxLength - 30 {
+                return String(truncated[truncated.startIndex..<breakIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            
+            // 문장 부호를 찾지 못했으면, 단어 단위로 자르기 시도
+            if let lastSpace = truncated.lastIndex(of: " "), truncated.distance(from: truncated.startIndex, to: lastSpace) > maxLength - 20 {
+                return String(truncated[truncated.startIndex..<lastSpace]) + "..."
+            }
+            
+            // 단어도 없으면 그냥 자르되 "..." 추가
+            return truncated.trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+        }
+        
         var summary = description.trimmingCharacters(in: .whitespacesAndNewlines)
         
         if !summary.isEmpty {
-            // 설명이 있으면 120자로 제한
-            if summary.count > 120 {
-                // 문장 단위로 자르기 (마지막 문장 부호 기준)
-                let truncated = String(summary.prefix(117))
-                
-                // 마지막 문장 부호 찾기
-                var lastBreakIndex: String.Index? = nil
-                var lastBreakDistance = 0
-                
-                if let period = truncated.lastIndex(of: ".") {
-                    let distance = truncated.distance(from: truncated.startIndex, to: period)
-                    if distance > lastBreakDistance {
-                        lastBreakIndex = period
-                        lastBreakDistance = distance
-                    }
-                }
-                if let periodKr = truncated.lastIndex(of: "。") {
-                    let distance = truncated.distance(from: truncated.startIndex, to: periodKr)
-                    if distance > lastBreakDistance {
-                        lastBreakIndex = periodKr
-                        lastBreakDistance = distance
-                    }
-                }
-                if let exclamation = truncated.lastIndex(of: "!") {
-                    let distance = truncated.distance(from: truncated.startIndex, to: exclamation)
-                    if distance > lastBreakDistance {
-                        lastBreakIndex = exclamation
-                        lastBreakDistance = distance
-                    }
-                }
-                if let question = truncated.lastIndex(of: "?") {
-                    let distance = truncated.distance(from: truncated.startIndex, to: question)
-                    if distance > lastBreakDistance {
-                        lastBreakIndex = question
-                        lastBreakDistance = distance
-                    }
-                }
-                
-                if let breakIndex = lastBreakIndex, lastBreakDistance > 50 {
-                    // 문장 끝이 있으면 그곳에서 자름
-                    let endIndex = truncated.index(breakIndex, offsetBy: 1)
-                    summary = String(truncated[truncated.startIndex..<endIndex])
-                } else {
-                    // 문장 끝이 없으면 그냥 자름
-                    summary = truncated + "..."
-                }
-            }
+            // 설명이 있으면 120자로 제한 (완전한 문장으로)
+            summary = truncateToSentence(summary, 120)
         } else {
             // 제목만 사용 (최대 100자)
             summary = title
             if summary.count > 100 {
-                summary = String(summary.prefix(97)) + "..."
+                summary = truncateToSentence(summary, 100)
             }
         }
         
